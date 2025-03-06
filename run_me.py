@@ -9,7 +9,7 @@ from utility import dump_keys, get_sock_fd
 
 if __name__ == "__main__" :
     models_list = ["phi4", "gemma", "qwen2.5", "mistral"]
-    # models_list = ["phi4"]
+    # models_list = ["phi4"]Dd
     socks = []
 
     no_of_models = len(models_list)
@@ -38,7 +38,4 @@ if __name__ == "__main__" :
             start_new_session=True
         )
 
-
-
     time.sleep(5)
-    
