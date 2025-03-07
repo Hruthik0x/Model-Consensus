@@ -2,12 +2,9 @@ import socket
 import os
 import argparse
 import json
-import threading
 import pickle
 import enum
-
 import utility as utils
-
 
 # Global vars - WIll avoid using them
 NODE_ID = None
@@ -34,6 +31,11 @@ def verify_node(msg) :
     vk = KEYS[node_id][1]
     return utils.ver_sig(vk, sig, message)
 
+def verify_client(msg) :
+    vk = msg[1:65]
+    msg = msg[65:]
+    return utils.ver_sig(vk, msg)
+
 def view_change() :
     global CUR_LEADER
     CUR_LEADER = (CUR_LEADER + 1) % len(PORTS)
@@ -46,12 +48,30 @@ def handle_client(client) :
             break 
 
         if int(data[0]) == 0 :
-            vk = data[1:66]
-            msg = data[66:]
-            if utils.ver_sig(vk, msg) : 
+            if verify_client(data) :
                 if CUR_LEADER == NODE_ID : 
+                    cl_msg = data[65:]
+
+                    l = len(data)
+                    l = l.to_bytes(2, "little")
+
                     # start the pre-prepare phase
-                    pass
+
+                    # msg[0:8] - request number - work on this :(
+                    req_no = cl_msg[:8]
+                    ques = cl_msg[8:]
+                    ans = bytes(utils.get_ans(ques, NODE_ID).encode('utf-8'))
+                    pack_dat = Phase.PRE_PREPARE.to_bytes(1, "little") + l + data + ans
+                    sig = utils.gen_sig(KEYS[NODE_ID][0], pack_dat)
+                    msg = NODE_ID.to_bytes(1, "little") + sig + pack_dat
+
+                    for i in range(len(PORTS)) :
+                        if i != NODE_ID :
+                            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                            sock.connect("127.0.0.1", PORTS[i])
+                            sock.sendall(msg)
+                            sock.close()
+
                 else :
                     # Forward the message to the leader
                     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -62,23 +82,57 @@ def handle_client(client) :
                 # assert False, "Invalid signature"
                 pass 
 
-        elif int(data) <= len(PORTS) :
+        elif int(data[0]) <= len(PORTS) :
+            if verify_node(data) :
+                req_type = data[65]
+                msg = data[66:]
+                if req_type == Phase.PRE_PREPARE :
+                    if data[0] == CUR_LEADER :
+                        l = int.from_bytes(msg[:2], "little")
+                        cl_dat = msg[2:2+l]
+                        lead_ans = msg[2+l:]
+                        verify_node(cl_dat)
+                        cl_msg = cl_dat[65:]
+                        req_no = cl_msg[:8]
+                        ques = cl_msg[8:]
+                        if utils.validate_ans(ques, lead_ans, NODE_ID) :
+                            # send the prepare msg
+                            dat = Phase.PREPARE.to_bytes(1, "little") + req_no
+                            sig = utils.gen_sig(KEYS[NODE_ID], dat)
+                            msg = NODE_ID.to_bytes(1, "little") + sig + dat
+                            for i in range(len(PORTS)) : 
+                                if i != NODE_ID : 
+                                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                                    sock.connect("127.0.0.1", PORTS[i])
+                                    sock.sendall(msg)
+                                    sock.close()
+                    else :
+                        # assert False, "Invalid leader"
+                        pass
 
-            verify_node(data)
-            msg = data[65:]
-            req_type = int(msg[0])
-            
-            if req_type == Phase.PREPARE :
-                pass
-            elif req_type == Phase.COMMIT :
-                pass
-            else :
+                    # 4 = 3*1 + 1
+                    # 4 = 3*x + 1
+                    # x = 1
+                    # no.of prepare msgs = 2f + 1 = 3
+
+                elif req_type == Phase.PREPARE :
+                    # Count no.of prepare messages received
+                    # if recv 
+                    # if recv more than 2f + 1 prepare messages, send commit messages
+                    pass
+
+                elif req_type == Phase.COMMIT :
+                    pass
+
+                else :
+                    pass 
+                    # assert False, "Invalid phase"
+            else : 
+                # assert False, "Invalid signature"
                 pass 
-                # assert False, "Invalid phase"
-
         else :
-            pass
-            # assert False, "Invalid node ID" 
+            # assert False, "Invalid nodeID"
+            pass 
 
 def init() : 
     global NODE_ID, CUR_LEADER, PORTS, SOCK, KEYS

@@ -5,7 +5,10 @@ import ecdsa
 import pickle
 import socket
 import os
+import ollama
 
+MODELS = ["phi4", "gemma", "qwen2.5", "mistral"]
+THRESHOLD = 80
 
 class __internal__ : 
     def generate_key():
@@ -40,3 +43,38 @@ def get_sock_fd() :
     sock_fd = sock.fileno()
     os.set_inheritable(sock_fd, True)
     return (sock, sock_fd)
+
+
+def get_ans(ques, model) : 
+    model = MODELS[model]
+    response: ollama.ChatResponse = ollama.chat(model=model, messages=[
+        { 
+            'role' : 'user',
+            'content' : ques,
+        },
+    ])
+    return response['message']['content']
+
+def validate_ans(ques, ans, model) :
+    model = MODELS[model]
+    prompt = f'''
+    I will provide a conversation between an interviewer and an interviewee. Your task is to rate the interviewee's answer on a scale from 1 to 100, where a higher score indicates stronger agreement. Your response should be in the following format : 
+
+    <format>
+        Index : {model}     
+    </format>
+
+    **Your response should not contain no other information or justification about the index other than the index (As mentioned in the format)**
+    '''
+
+    prompt += f"\n\nInterviewer: {ques} \n\n Inteervieweee: {ans}"
+
+    response: ollama.ChatResponse = ollama.chat(model='qwen2.5', messages=[
+        {
+            'role' : 'user',
+            'content' : prompt,
+        },
+    ])
+
+    data = response['message']['content']
+    # work on this :)
