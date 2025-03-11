@@ -30,7 +30,10 @@ def gen_sig(sk, message):
     return sig
 
 def ver_sig(vk, sig, message):
-    return vk.verify(sig, message)
+    try:
+        return vk.verify(sig, message)
+    except ecdsa.BadSignatureError:
+        return False
 
 def dump_keys(n) :
     keys = __internal__.gen_keys(n)
@@ -57,11 +60,11 @@ def get_ans(ques, model) :
 
 def validate_ans(ques, ans, model) :
     model = MODELS[model]
-    prompt = f'''
+    prompt = '''
     I will provide a conversation between an interviewer and an interviewee. Your task is to rate the interviewee's answer on a scale from 1 to 100, where a higher score indicates stronger agreement. Your response should be in the following format : 
 
     <format>
-        Index : {model}     
+        Index : {index}     
     </format>
 
     **Your response should not contain no other information or justification about the index other than the index (As mentioned in the format)**
@@ -77,4 +80,16 @@ def validate_ans(ques, ans, model) :
     ])
 
     data = response['message']['content']
-    # work on this :)
+    print(data)
+    try : 
+        data = int(data)
+        print(data)
+        return data >= THRESHOLD
+    except :
+        if data.find("Index") == -1 : 
+            assert False, "Failed to extract the index"
+        else : 
+            index = data.split("Index : ")[1]
+            index = int(index)
+            print("INDEX", index)
+            return index >= THRESHOLD

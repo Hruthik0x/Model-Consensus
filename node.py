@@ -5,6 +5,9 @@ import json
 import pickle
 import enum
 import utility as utils
+import threading
+
+TEST_MODE = True
 
 # Global vars - WIll avoid using them
 NODE_ID = None
@@ -13,6 +16,15 @@ PORTS = None
 SOCK = None
 CUR_PHASE = None 
 KEYS = None
+
+NO_PREP = 0
+NO_COMMIT = 0
+MAX_NO_PREP = None 
+
+CUR_REQ_DATA = None
+FINAL_RECORD = {}
+
+CLIENT_PORT = None
 
 class Phase(enum.Enum) :
     PRE_PREPARE = 0
@@ -31,98 +43,153 @@ def verify_node(msg) :
     vk = KEYS[node_id][1]
     return utils.ver_sig(vk, sig, message)
 
-def verify_client(msg) :
-    vk = msg[1:65]
-    msg = msg[65:]
-    return utils.ver_sig(vk, msg)
-
 def view_change() :
     global CUR_LEADER
     CUR_LEADER = (CUR_LEADER + 1) % len(PORTS)
 
 def handle_client(client) :
+    global NO_PREP, NO_COMMIT, FINAL_RECORD, CUR_REQ_DATA
     while True : 
-        data = client.recv(1024)
+        data = client.recv(10000)
 
         if not data : 
             break 
 
-        if int(data[0]) == 0 :
-            if verify_client(data) :
-                if CUR_LEADER == NODE_ID : 
-                    cl_msg = data[65:]
+        if int(data[0]) == 255 :
+            if CUR_LEADER == NODE_ID : 
+                cl_msg = data[1:]
 
-                    l = len(data)
-                    l = l.to_bytes(2, "little")
+                l = len(data)
+                l = l.to_bytes(2, "little")
 
-                    # start the pre-prepare phase
+                # start the pre-prepare phase
 
-                    # msg[0:8] - request number - work on this :(
-                    req_no = cl_msg[:8]
-                    ques = cl_msg[8:]
-                    ans = bytes(utils.get_ans(ques, NODE_ID).encode('utf-8'))
-                    pack_dat = Phase.PRE_PREPARE.to_bytes(1, "little") + l + data + ans
-                    sig = utils.gen_sig(KEYS[NODE_ID][0], pack_dat)
-                    msg = NODE_ID.to_bytes(1, "little") + sig + pack_dat
+                # msg[0:8] - request number
+                req_no = cl_msg[:8]
+                ques = cl_msg[8:]
 
-                    for i in range(len(PORTS)) :
-                        if i != NODE_ID :
-                            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                            sock.connect("127.0.0.1", PORTS[i])
-                            sock.sendall(msg)
-                            sock.close()
+                ans = utils.get_ans(ques, NODE_ID)
+    
+                # ans = "2 + 2 is 4"
+                print(ans)
 
-                else :
-                    # Forward the message to the leader
-                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    sock.connect(("127.0.0.1", PORTS[CUR_LEADER]))
-                    sock.sendall(data)
-                    sock.close()
+                ans = ans.encode('utf-8')
+                CUR_REQ_DATA = (req_no, ques, ans)
+                pack_dat = Phase.PRE_PREPARE.value.to_bytes(1, "little") + l + data + ans
+                sig = utils.gen_sig(KEYS[NODE_ID][0], pack_dat)
+                msg = NODE_ID.to_bytes(1, "little") + sig + pack_dat
+
+                assert verify_node(msg), "Invalid signature"
+                print("SIG VERIFIED")
+
+                for i in range(len(PORTS)) :
+                    if i != NODE_ID :
+                        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        sock.connect(("127.0.0.1", PORTS[i]))
+                        sock.sendall(msg)
+                        sock.close()
+                print("pre - prepare msgs sent")
             else :
-                # assert False, "Invalid signature"
-                pass 
+                # Forward the message to the leader
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.connect(("127.0.0.1", PORTS[CUR_LEADER]))
+                sock.sendall(data)
+                sock.close()
 
-        elif int(data[0]) <= len(PORTS) :
+                # python3 node.py --ports [4000,4001,4002,4003] --leader 2 --id 0
+
+        elif int(data[0]) < len(PORTS) :
             if verify_node(data) :
+                
+                # first 65 bytes spent for signature and node id
                 req_type = data[65]
                 msg = data[66:]
-                if req_type == Phase.PRE_PREPARE :
+
+                if req_type == Phase.PRE_PREPARE.value :
+                    # only leader can send pre-prepare
                     if data[0] == CUR_LEADER :
+
+                        print("INSIDE")
+
                         l = int.from_bytes(msg[:2], "little")
-                        cl_dat = msg[2:2+l]
-                        lead_ans = msg[2+l:]
-                        verify_node(cl_dat)
-                        cl_msg = cl_dat[65:]
-                        req_no = cl_msg[:8]
-                        ques = cl_msg[8:]
+                        # first two bytes spent for length of the cl_dat
+
+                        msg = msg[2:]
+                        
+                        # cl_dat = 255 + request number + question
+                        cl_dat = msg[:l]
+                        assert cl_dat[0] == 255, "Invalid message"
+                        
+                        # skipping 255
+                        cl_dat = cl_dat[1:]
+
+                        req_no = cl_dat[:8]
+                        ques = cl_dat[8:]
+
+                        # Answer generated by the lead
+                        lead_ans = msg[l:]
+
+                        CUR_REQ_DATA = (req_no, ques, lead_ans)
+
+                        print(ques.decode('utf-8'), lead_ans.decode('utf-8'))
+
                         if utils.validate_ans(ques, lead_ans, NODE_ID) :
+                            
+                            print("sent prepare msg")
                             # send the prepare msg
-                            dat = Phase.PREPARE.to_bytes(1, "little") + req_no
-                            sig = utils.gen_sig(KEYS[NODE_ID], dat)
+                            dat = Phase.PREPARE.value.to_bytes(1, "little") + req_no
+                            sig = utils.gen_sig(KEYS[NODE_ID][0], dat)
                             msg = NODE_ID.to_bytes(1, "little") + sig + dat
                             for i in range(len(PORTS)) : 
                                 if i != NODE_ID : 
                                     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                                    sock.connect("127.0.0.1", PORTS[i])
+                                    sock.connect(("127.0.0.1", PORTS[i]))
                                     sock.sendall(msg)
                                     sock.close()
+
+                        else : 
+                            print("Rejected")
                     else :
                         # assert False, "Invalid leader"
                         pass
 
-                    # 4 = 3*1 + 1
-                    # 4 = 3*x + 1
-                    # x = 1
-                    # no.of prepare msgs = 2f + 1 = 3
+                # have to change this scetion to commit phase ?
+                # in prepare phase, have to check if the request received from other nodes
+                # is the same as it received from the leader 
 
-                elif req_type == Phase.PREPARE :
-                    # Count no.of prepare messages received
-                    # if recv 
-                    # if recv more than 2f + 1 prepare messages, send commit messages
-                    pass
+                elif req_type == Phase.PREPARE.value :
+                    NO_PREP += 1
+                    if NO_PREP >= MAX_NO_PREP :
+                        req_no = msg 
+                        print(req_no)
+                        dat = Phase.COMMIT.value.to_bytes(1, "little") + req_no
+                        sig = utils.gen_sig(KEYS[NODE_ID][0], dat)
+                        msg = NODE_ID.to_bytes(1, "little") + sig + dat
+                        for i in range(len(PORTS)) :
+                            if i != NODE_ID :
+                                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                                sock.connect(("127.0.0.1", PORTS[i]))
+                                sock.sendall(msg)
+                                sock.close()
+                        # reset stuff
+                        NO_PREP = 0
 
-                elif req_type == Phase.COMMIT :
-                    pass
+                # have to calculate here and then commit 
+                elif req_type == Phase.COMMIT.value :
+                    if NO_COMMIT >= MAX_NO_PREP : 
+                        NO_COMMIT = 0
+                        req_no =  int.from_bytes(msg, "little")
+                        print("COMMIT PHASE", req_no)
+                        # open connection to CLIENT_PORT
+                        # send the answer to the client
+                        # close the connection
+                        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        sock.connect(("127.0.0.1", CLIENT_PORT))
+                        sock.sendall(CUR_REQ_DATA[2])
+                        sock.close()
+
+                    else : 
+                        NO_COMMIT += 1
 
                 else :
                     pass 
@@ -135,29 +202,43 @@ def handle_client(client) :
             pass 
 
 def init() : 
-    global NODE_ID, CUR_LEADER, PORTS, SOCK, KEYS
+    global NODE_ID, CUR_LEADER, PORTS, SOCK, KEYS, MAX_NO_PREP, CLIENT_PORT
     parser = argparse.ArgumentParser(description="Process some arguments.")
-    parser.add_argument("--id", type=int, help="ID of the model.")
-    parser.add_argument("--fd", type=int, help="File descriptors to receive.")
+    if not TEST_MODE :
+        parser.add_argument("--fd", type=int, help="File descriptors to receive.")
+    else :
+        parser.add_argument("--client", type=int, help="Client port.")
     parser.add_argument("--ports", type=json.loads, help="List of ports as JSON")
     parser.add_argument("--leader", type=int, help="Leader ID.")
+    parser.add_argument("--id", type=int, help="ID of the model.")
 
     args = parser.parse_args()
-
-    fd = os.dup(args.fd)
-    SOCK = socket.fromfd(fd, socket.AF_INET, socket.SOCK_STREAM)
-    os.close(args.fd)
 
     NODE_ID = args.id
     CUR_LEADER = args.leader
     PORTS = args.ports
-
     KEYS = pickle.load(open('keys.pkl', 'rb'))
+    MAX_NO_PREP = ((len(PORTS) - 1) / 3) * 2
+
+    if not TEST_MODE :
+        fd = os.dup(args.fd)
+        SOCK = socket.fromfd(fd, socket.AF_INET, socket.SOCK_STREAM)
+        os.close(args.fd)
+    else : 
+        SOCK = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        SOCK.bind(("127.0.0.1", PORTS[NODE_ID]))
+        # print(PORTS[NODE_ID])
+        CLIENT_PORT = args.client
+        # print(CLIENT_PORT)
+
+    SOCK.listen(5)
+    while True : 
+        client, addr = SOCK.accept()
+        threading.Thread(target=handle_client, args=(client,)).start()
+
 
 if __name__ == "__main__":
-    data = pickle.load(open('keys.pkl', 'rb'))
-    sig = data[0][0].sign(b"Hello")
-    print(len(sig))
-    print(utils.ver_sig(data[0][1], sig, b"Hello"))
-    # init()
+    init()
 
+
+# python3 node.py --ports [4000,4001,4002,4003] --leader 2 --id 0
