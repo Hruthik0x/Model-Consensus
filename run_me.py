@@ -3,17 +3,19 @@ import time
 import json
 import random
 import socket
-from node import TEST_MODE
 from utility import __internal__
 from threading import Thread
 # user defined
 from utility import dump_keys, get_sock_fd, gen_sig
+
+TEST_MODE = True
 
 def handle_client(client) :
     data = client.recv(10000)
     if not data : 
         return
     print("Received data : " ,data)
+    print("\n")
 
 
 if __name__ == "__main__" :
@@ -60,11 +62,14 @@ if __name__ == "__main__" :
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.connect(("127.0.0.1", ports[leader]))
             query = input("Enter your query : ")
-            # query = "What is 2 + 2 ?"
-            sk, vk = __internal__.gen_keys(1)[0]
-            prefix = (255).to_bytes(1, "little") + (0).to_bytes(8, "little") 
-            query = (prefix + query.encode('utf-8'))
-            sock.sendall(query)
+
+            send_data = {
+                "ques" : query,
+                "from" : "client",
+            }
+            send_data = json.dumps(send_data).encode('utf-8')
+ 
+            sock.sendall(send_data)
             print("Sent query")
             break
         except Exception as e : 

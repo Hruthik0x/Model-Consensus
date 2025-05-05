@@ -6,6 +6,7 @@ import pickle
 import socket
 import os
 import ollama
+import hashlib
 
 MODELS = ["phi4", "gemma", "qwen2.5", "mistral"]
 THRESHOLD = 80
@@ -23,7 +24,10 @@ class __internal__ :
             out[a] = (sk, vk)
         return out        
 
-
+def get_digest(message):
+    if isinstance(message, str):
+        message = message.encode('utf-8')
+    return hashlib.sha256(message).hexdigest()
 
 def gen_sig(sk, message):
     sig = sk.sign(message)
@@ -93,3 +97,12 @@ def validate_ans(ques, ans, model) :
             index = int(index)
             print("INDEX", index)
             return index >= THRESHOLD
+        
+# metrics like 
+# time 
+# cost - computational, communicational 
+
+# make it an algorithm
+
+# find a bunch of queries (dataset) and get these metrics
+# 
