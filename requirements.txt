@@ -1,0 +1,6 @@
+flask
+pandas
+requests
+tensorflow
+tensorflow-hub
+absl-py

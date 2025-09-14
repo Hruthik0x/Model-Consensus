@@ -1,3 +1,4 @@
-/logs
-keys.pkl
-/__pycache__
+venv/
+__pycache__/
+*.ipynb
+*.log
